@@ -2012,6 +2012,7 @@ static bool CheckConstexprDeclStmt(Sema &SemaRef, const FunctionDecl *Dcl,
   // C++11 [dcl.constexpr]p3 and p4:
   //  The definition of a constexpr function(p3) or constructor(p4) [...] shall
   //  contain only
+  enum { Function = 0, Constructor = 1 };
   for (const auto *DclIt : DS->decls()) {
     switch (DclIt->getKind()) {
     case Decl::StaticAssert:
@@ -2052,7 +2053,7 @@ static bool CheckConstexprDeclStmt(Sema &SemaRef, const FunctionDecl *Dcl,
         if (Kind == Sema::CheckConstexprKind::Diagnose) {
           SemaRef.DiagCompat(DS->getBeginLoc(),
                              diag_compat::constexpr_type_definition)
-              << isa<CXXConstructorDecl>(Dcl);
+              << (isa<CXXConstructorDecl>(Dcl) ? Constructor : Function);
         } else if (!SemaRef.getLangOpts().CPlusPlus14) {
           return false;
         }
@@ -2073,33 +2074,37 @@ static bool CheckConstexprDeclStmt(Sema &SemaRef, const FunctionDecl *Dcl,
       //   thread storage duration or [before C++2a] for which no
       //   initialization is performed.
       const auto *VD = cast<VarDecl>(DclIt);
+
+
       if (VD->isThisDeclarationADefinition()) {
         if (VD->isStaticLocal()) {
           if (Kind == Sema::CheckConstexprKind::Diagnose) {
             SemaRef.DiagCompat(VD->getLocation(),
                                diag_compat::constexpr_static_var)
-                << isa<CXXConstructorDecl>(Dcl)
+                << (isa<CXXConstructorDecl>(Dcl) ? Constructor : Function)
                 << (VD->getTLSKind() == VarDecl::TLS_Dynamic);
           } else if (!SemaRef.getLangOpts().CPlusPlus23) {
             return false;
           }
         }
+
         if (SemaRef.LangOpts.CPlusPlus23) {
           CheckLiteralType(SemaRef, Kind, VD->getLocation(), VD->getType(),
                            diag::warn_cxx20_compat_constexpr_var,
-                           isa<CXXConstructorDecl>(Dcl));
+                           isa<CXXConstructorDecl>(Dcl) ? Constructor
+                                                        : Function);
         } else if (CheckLiteralType(
                        SemaRef, Kind, VD->getLocation(), VD->getType(),
                        diag::err_constexpr_local_var_non_literal_type,
-                       isa<CXXConstructorDecl>(Dcl))) {
+                       isa<CXXConstructorDecl>(Dcl) ? Constructor : Function)) {
           return false;
         }
-        if (!VD->getType()->isDependentType() &&
-            !VD->hasInit() && !VD->isCXXForRangeDecl()) {
+        if (!VD->getType()->isDependentType() && !VD->hasInit() &&
+            !VD->isCXXForRangeDecl()) {
           if (Kind == Sema::CheckConstexprKind::Diagnose) {
             SemaRef.DiagCompat(VD->getLocation(),
                                diag_compat::constexpr_local_var_no_init)
-                << isa<CXXConstructorDecl>(Dcl);
+                << (isa<CXXConstructorDecl>(Dcl) ? Constructor : Function);
           } else if (!SemaRef.getLangOpts().CPlusPlus20) {
             return false;
           }
@@ -2108,7 +2113,7 @@ static bool CheckConstexprDeclStmt(Sema &SemaRef, const FunctionDecl *Dcl,
       }
       if (Kind == Sema::CheckConstexprKind::Diagnose) {
         SemaRef.DiagCompat(VD->getLocation(), diag_compat::constexpr_local_var)
-            << isa<CXXConstructorDecl>(Dcl);
+            << (isa<CXXConstructorDecl>(Dcl) ? Constructor : Function);
       } else if (!SemaRef.getLangOpts().CPlusPlus14) {
         return false;
       }
@@ -2208,6 +2213,7 @@ CheckConstexprFunctionStmt(Sema &SemaRef, const FunctionDecl *Dcl, Stmt *S,
                            SourceLocation &Cxx2bLoc,
                            Sema::CheckConstexprKind Kind) {
   // - its function-body shall be [...] a compound-statement that contains only
+  enum { Function = 0, Constructor = 1 };
   switch (S->getStmtClass()) {
   case Stmt::NullStmtClass:
     //   - null statements,
@@ -2367,6 +2373,7 @@ CheckConstexprFunctionStmt(Sema &SemaRef, const FunctionDecl *Dcl, Stmt *S,
 static bool CheckConstexprFunctionBody(Sema &SemaRef, const FunctionDecl *Dcl,
                                        Stmt *Body,
                                        Sema::CheckConstexprKind Kind) {
+  enum { Function = 0, Constructor = 1 };
   SmallVector<SourceLocation, 4> ReturnStmts;
 
   if (isa<CXXTryStmt>(Body)) {
@@ -2382,6 +2389,7 @@ static bool CheckConstexprFunctionBody(Sema &SemaRef, const FunctionDecl *Dcl,
     //
     // This restriction is lifted in C++2a, as long as inner statements also
     // apply the general constexpr rules.
+
     switch (Kind) {
     case Sema::CheckConstexprKind::CheckValid:
       if (!SemaRef.getLangOpts().CPlusPlus20)
@@ -2391,11 +2399,11 @@ static bool CheckConstexprFunctionBody(Sema &SemaRef, const FunctionDecl *Dcl,
     case Sema::CheckConstexprKind::Diagnose:
       SemaRef.DiagCompat(Body->getBeginLoc(),
                          diag_compat::constexpr_function_try_block)
-          << isa<CXXConstructorDecl>(Dcl);
+          << (isa<CXXConstructorDecl>(Dcl) ? Constructor : Function);
       break;
     }
   }
-
+    
   // - its function-body shall be [...] a compound-statement that contains only
   //   [... list of cases ...]
   //
@@ -2416,15 +2424,17 @@ static bool CheckConstexprFunctionBody(Sema &SemaRef, const FunctionDecl *Dcl,
         (Cxx2aLoc.isValid() && !SemaRef.getLangOpts().CPlusPlus20) ||
         (Cxx1yLoc.isValid() && !SemaRef.getLangOpts().CPlusPlus17))
       return false;
-  } else if (Cxx2bLoc.isValid()) {
-    SemaRef.DiagCompat(Cxx2bLoc, diag_compat::cxx23_constexpr_body_invalid_stmt)
-        << isa<CXXConstructorDecl>(Dcl);
-  } else if (Cxx2aLoc.isValid()) {
-    SemaRef.DiagCompat(Cxx2aLoc, diag_compat::cxx20_constexpr_body_invalid_stmt)
-        << isa<CXXConstructorDecl>(Dcl);
-  } else if (Cxx1yLoc.isValid()) {
-    SemaRef.DiagCompat(Cxx1yLoc, diag_compat::cxx14_constexpr_body_invalid_stmt)
-        << isa<CXXConstructorDecl>(Dcl);
+  } else {
+    if (Cxx2bLoc.isValid()) {
+      SemaRef.DiagCompat(Cxx2bLoc, diag_compat::cxx23_constexpr_body_invalid_stmt)
+          << (isa<CXXConstructorDecl>(Dcl) ? Constructor : Function);
+    } else if (Cxx2aLoc.isValid()) {
+      SemaRef.DiagCompat(Cxx2aLoc, diag_compat::cxx20_constexpr_body_invalid_stmt)
+          << (isa<CXXConstructorDecl>(Dcl) ? Constructor : Function);
+    } else if (Cxx1yLoc.isValid()) {
+      SemaRef.DiagCompat(Cxx1yLoc, diag_compat::cxx14_constexpr_body_invalid_stmt)
+          << (isa<CXXConstructorDecl>(Dcl) ? Constructor : Function);
+    }
   }
 
   if (const CXXConstructorDecl *Constructor
@@ -2501,11 +2511,12 @@ static bool CheckConstexprFunctionBody(Sema &SemaRef, const FunctionDecl *Dcl,
           return false;
         break;
       }
-    } else if (ReturnStmts.size() > 1) {
+    } else if (ReturnStmts.size() > 1) {      
       switch (Kind) {
       case Sema::CheckConstexprKind::Diagnose:
         SemaRef.DiagCompat(ReturnStmts.back(),
-                           diag_compat::constexpr_body_multiple_return);
+                           diag_compat::constexpr_body_multiple_return)
+            << (isa<CXXConstructorDecl>(Dcl) ? Constructor : Function);
         for (unsigned I = 0; I < ReturnStmts.size() - 1; ++I)
           SemaRef.Diag(ReturnStmts[I],
                        diag::note_constexpr_body_previous_return);
